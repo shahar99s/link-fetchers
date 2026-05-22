@@ -931,3 +931,294 @@ def test_chatgpt_writes_conversation_file(tmp_path):
     assert result["local_file_path"].endswith("Demo-Chat.md")
     assert "Alice" in saved_text
     assert "Hello" in saved_text
+
+
+# ── GoFile tests ─────────────────────────────────────────────────────────────
+
+from link_fetchers.fetchers.gofile_fetcher import GoFileFetcher
+
+
+def test_gofile_extracts_content_id_from_url():
+    fetcher = GoFileFetcher("https://gofile.io/d/SXwLDt", mode=Mode.INFO)
+
+    assert fetcher.content_id == "SXwLDt"
+
+
+def test_gofile_content_url_without_password():
+    fetcher = GoFileFetcher("https://gofile.io/d/SXwLDt", mode=Mode.INFO)
+
+    assert (
+        fetcher._content_url()
+        == "/contents/SXwLDt?cache=true&sortField=createTime&sortDirection=1"
+    )
+
+
+def test_gofile_content_url_with_password():
+    import hashlib
+
+    fetcher = GoFileFetcher(
+        "https://gofile.io/d/SXwLDt", mode=Mode.INFO, password="secret"
+    )
+    expected_hash = hashlib.sha256(b"secret").hexdigest()
+
+    assert (
+        fetcher._content_url()
+        == f"/contents/SXwLDt?cache=true&sortField=createTime&sortDirection=1&password={expected_hash}"
+    )
+
+
+def test_gofile_extracts_primary_file_from_children():
+    fetcher = GoFileFetcher("https://gofile.io/d/SXwLDt", mode=Mode.INFO)
+    response = Response(
+        httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "data": {
+                    "id": "SXwLDt",
+                    "type": "folder",
+                    "name": "My Folder",
+                    "children": {
+                        "abc123": {
+                            "id": "abc123",
+                            "type": "file",
+                            "name": "report.pdf",
+                            "mimetype": "application/pdf",
+                            "size": 123456,
+                            "link": "https://cdn1.gofile.io/download/abc123/report.pdf",
+                            "createTime": 1716000000,
+                        }
+                    },
+                },
+            },
+            request=httpx.Request("GET", "https://api.gofile.io/contents/SXwLDt"),
+        )
+    )
+
+    state = fetcher._extract_content_state(response)
+
+    assert state["available"] is True
+    assert state["filename"] == "report.pdf"
+    assert state["direct_link"] == "https://cdn1.gofile.io/download/abc123/report.pdf"
+    assert state["metadata"]["size"] == 123456
+    assert state["metadata"]["file_count"] == 1
+
+
+def test_gofile_unavailable_when_no_children():
+    fetcher = GoFileFetcher("https://gofile.io/d/SXwLDt", mode=Mode.INFO)
+    response = Response(
+        httpx.Response(
+            200,
+            json={
+                "status": "ok",
+                "data": {"id": "SXwLDt", "type": "folder", "children": {}},
+            },
+            request=httpx.Request("GET", "https://api.gofile.io/contents/SXwLDt"),
+        )
+    )
+
+    state = fetcher._extract_content_state(response)
+
+    assert state["available"] is False
+
+
+# ── Wormhole tests ───────────────────────────────────────────────────────────
+
+from link_fetchers.fetchers.wormhole_fetcher import (
+    WormholeFetcher,
+    _bencode_decode,
+    _extract_torrent_fields,
+)
+
+
+def test_wormhole_parses_room_id_and_key_from_url():
+    fetcher = WormholeFetcher(
+        "https://wormhole.app/W00DZv#gDZGGoKuKsWb4uqdBfgBsA",
+        mode=Mode.INFO,
+    )
+
+    assert fetcher.room_id == "W00DZv"
+    assert len(fetcher.main_key) == 16
+
+
+def test_wormhole_rejects_url_without_fragment():
+    with pytest.raises(ValueError, match="Invalid Wormhole URL"):
+        WormholeFetcher("https://wormhole.app/W00DZv", mode=Mode.INFO)
+
+
+def test_wormhole_auth_header_is_deterministic():
+    fetcher = WormholeFetcher(
+        "https://wormhole.app/W00DZv#gDZGGoKuKsWb4uqdBfgBsA",
+        mode=Mode.INFO,
+    )
+    header1 = fetcher._auth_header("b+sjNKtTVwrLr6JafWSLXw==")
+    header2 = fetcher._auth_header("b+sjNKtTVwrLr6JafWSLXw==")
+
+    assert header1.startswith("Bearer sync-v1 ")
+    assert header1 == header2
+
+
+def test_wormhole_bencode_decode_dict():
+    data = b"d3:fooi42e3:bar3:baze"
+    result, _ = _bencode_decode(data)
+
+    assert result[b"foo"] == 42
+    assert result[b"bar"] == b"baz"
+
+
+def test_wormhole_bencode_decode_list():
+    data = b"li1ei2ei3ee"
+    result, _ = _bencode_decode(data)
+
+    assert result == [1, 2, 3]
+
+
+def test_wormhole_extract_torrent_fields_single_file():
+    download_url = "https://example.com/dl"
+    url_len = len(download_url)
+    data = (
+        b"d"
+        b"4:infod"
+        b"4:name8:file.zip"
+        b"6:lengthi1000e"
+        b"e"
+        b"8:url-list" + f"{url_len}:{download_url}".encode() + b"e"
+    )
+    torrent, _ = _bencode_decode(data)
+    fields = _extract_torrent_fields(torrent)
+
+    assert fields["name"] == "file.zip"
+    assert fields["size"] == 1000
+    assert fields["downloadUrl"] == download_url
+
+
+# ── Turbobit tests ───────────────────────────────────────────────────────────
+
+from link_fetchers.fetchers.turbobit_fetcher import TurbobitFetcher
+
+
+def test_turbobit_extracts_file_id_from_trbt_url():
+    fetcher = TurbobitFetcher("https://trbt.cc/v8y7cq32fay2.html", mode=Mode.INFO)
+
+    assert fetcher.file_id == "v8y7cq32fay2"
+
+
+def test_turbobit_extracts_file_id_from_turbobit_url():
+    fetcher = TurbobitFetcher("https://turbobit.net/v8y7cq32fay2.html", mode=Mode.INFO)
+
+    assert fetcher.file_id == "v8y7cq32fay2"
+
+
+def test_turbobit_extract_info_state_parses_json():
+    fetcher = TurbobitFetcher("https://turbobit.net/v8y7cq32fay2.html", mode=Mode.INFO)
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "file": {"id": "v8y7cq32fay2", "name": "report.pdf", "size": 512000},
+                "premiumOnlyDownload": False,
+            }
+
+    result = fetcher._extract_info_state(FakeResponse())
+
+    assert result["available"] is True
+    assert result["filename"] == "report.pdf"
+    assert result["metadata"]["size"] == 512000
+    assert result["metadata"]["premium_only"] is False
+
+
+def test_turbobit_extract_info_state_handles_404():
+    fetcher = TurbobitFetcher("https://turbobit.net/v8y7cq32fay2.html", mode=Mode.INFO)
+
+    class FakeResponse:
+        status_code = 404
+
+        def json(self):
+            return {}
+
+    result = fetcher._extract_info_state(FakeResponse())
+
+    assert result["available"] is False
+    assert result["metadata"]["state"] == "not_found"
+
+
+def test_turbobit_extract_download_state_parses_download_url():
+    fetcher = TurbobitFetcher("https://turbobit.net/v8y7cq32fay2.html", mode=Mode.INFO)
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "downloadUrl": "https://turbobit.net/download/redirect/token/file.jpg"
+            }
+
+    result = fetcher._extract_download_state(FakeResponse())
+
+    assert result["download_available"] is True
+    assert (
+        result["direct_link"] == "https://turbobit.net/download/redirect/token/file.jpg"
+    )
+
+
+# ── Box tests ─────────────────────────────────────────────────────────────────
+
+from link_fetchers.fetchers.box_fetcher import BoxFetcher
+
+
+def test_box_detects_file_url():
+    assert BoxFetcher.is_relevant_url(
+        "https://app.box.com/file/2240429889078?box_source=legacy-notify_existing_collab_file"
+    )
+
+
+def test_box_detects_shared_url():
+    assert BoxFetcher.is_relevant_url("https://app.box.com/s/abc123xyz")
+
+
+def test_box_does_not_match_terabox():
+    assert not BoxFetcher.is_relevant_url("https://1024terabox.com/s/abc")
+
+
+def test_box_extracts_file_id():
+    fetcher = BoxFetcher(
+        "https://app.box.com/file/2240429889078", mode=Mode.INFO, access_token="tok"
+    )
+
+    assert fetcher.link_type == "file"
+    assert fetcher.file_id == "2240429889078"
+
+
+def test_box_extracts_shared_code():
+    fetcher = BoxFetcher("https://app.box.com/s/abc123xyz", mode=Mode.INFO)
+
+    assert fetcher.link_type == "shared"
+    assert fetcher.shared_link_url == "https://app.box.com/s/abc123xyz"
+
+
+def test_box_extract_state_parses_json():
+    fetcher = BoxFetcher(
+        "https://app.box.com/file/2240429889078", mode=Mode.INFO, access_token="tok"
+    )
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "id": "2240429889078",
+                "name": "report.pdf",
+                "size": 512000,
+                "sha1": "abc123",
+                "created_at": "2024-01-01T00:00:00-08:00",
+                "modified_at": "2024-06-01T00:00:00-07:00",
+            }
+
+    result = fetcher._extract_state(FakeResponse())
+
+    assert result["available"] is True
+    assert result["filename"] == "report.pdf"
+    assert result["metadata"]["size"] == 512000
+    assert result["file_id"] == "2240429889078"

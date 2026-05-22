@@ -23,7 +23,7 @@ packages = [{include = "link_fetchers"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
-httporchestrator = {path = "../httporchestrator", develop = true}
+httporchestrator = ">=0"
 curl-cffi = ">=0.7"
 pycryptodome = ">=3.0"
 cryptography = ">=3.0"

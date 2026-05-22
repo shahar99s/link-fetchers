@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
 from collections.abc import Callable, Sequence
+from datetime import datetime
 from functools import wraps
 from typing import Any
 
@@ -141,12 +141,17 @@ class BaseFetcher:
 
     def _apply_retry(self, steps: list) -> list:
         from dataclasses import replace
+
         result = []
         for step in steps:
             if isinstance(step, RequestStep):
                 step = step.retry(self.retry_times, self.retry_interval)
-            elif isinstance(step, ConditionalStep) and isinstance(step.step, RequestStep):
-                step = replace(step, step=step.step.retry(self.retry_times, self.retry_interval))
+            elif isinstance(step, ConditionalStep) and isinstance(
+                step.step, RequestStep
+            ):
+                step = replace(
+                    step, step=step.step.retry(self.retry_times, self.retry_interval)
+                )
             result.append(step)
         return result
 
