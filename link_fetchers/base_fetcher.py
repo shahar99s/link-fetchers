@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable, Sequence
+from datetime import datetime
 from functools import wraps
 from typing import Any
 
@@ -25,6 +26,8 @@ class BaseFetcher:
         "log_details",
         "mode",
         "save_path",
+        "retry_times",
+        "retry_interval",
     }
     _FETCHER_BASE_KWARGS_ATTR = "_fetcher_base_kwargs"
 
@@ -129,9 +132,28 @@ class BaseFetcher:
         return []
 
     def build_steps(self, mode: Mode) -> list:
-        return self.steps_for_mode(
+        steps = self.steps_for_mode(
             mode, self.build_info_steps(), self.build_fetch_steps()
         )
+        if self.retry_times > 0:
+            steps = self._apply_retry(steps)
+        return steps
+
+    def _apply_retry(self, steps: list) -> list:
+        from dataclasses import replace
+
+        result = []
+        for step in steps:
+            if isinstance(step, RequestStep):
+                step = step.retry(self.retry_times, self.retry_interval)
+            elif isinstance(step, ConditionalStep) and isinstance(
+                step.step, RequestStep
+            ):
+                step = replace(
+                    step, step=step.step.retry(self.retry_times, self.retry_interval)
+                )
+            result.append(step)
+        return result
 
     def extract_by_key_or_cb(
         self, key_or_cb: str | Callable[[dict], Any], variables: dict
@@ -232,6 +254,8 @@ class BaseFetcher:
         mode: Mode | None = None,
         log_details: bool | None = None,
         save_path: str | os.PathLike | None = None,
+        retry_times: int = 3,
+        retry_interval: float = 2.0,
     ):
         base_kwargs = self.constructor_base_kwargs()
         if cookies is None:
@@ -244,6 +268,8 @@ class BaseFetcher:
             log_details = base_kwargs.get("log_details", False)
         if save_path is None:
             save_path = base_kwargs.get("save_path")
+        self.retry_times: int = base_kwargs.get("retry_times", retry_times)
+        self.retry_interval: float = base_kwargs.get("retry_interval", retry_interval)
         self.save_path = os.path.abspath(os.fspath(save_path or os.getcwd()))
         self.mode = mode
         self.impersonate = base_kwargs.get("impersonate", self.IMPERSONATE)
@@ -272,13 +298,20 @@ class BaseFetcher:
         self.flow = self.flow.export(list(export))
         return self
 
+    def _log_case_id(self) -> str:
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        name = (self.NAME or "fetcher").lower().replace(" ", "-")
+        mode = self.mode.name.lower() if self.mode else "unknown"
+        return f"{ts}_{name}_{mode}"
+
     def run(self, param: dict | None = None):
         self.flow = self.flow.with_steps(tuple(self.steps))
         client = self.build_http_client()
+        case_id = self._log_case_id()
         if client is None:
-            return self.flow.run(inputs=param)
+            return self.flow.run(inputs=param, case_id=case_id)
         try:
-            return self.flow.run(inputs=param, client=client)
+            return self.flow.run(inputs=param, client=client, case_id=case_id)
         finally:
             client.close()
 

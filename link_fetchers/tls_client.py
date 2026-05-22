@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import httpx
+from curl_cffi import BrowserTypeLiteral
+from curl_cffi.const import CurlOpt
 from curl_cffi.requests import Session
 
 _OS_SUFFIX: dict[str, str] = {
@@ -21,7 +25,21 @@ def resolve_impersonate(impersonate: str | dict) -> str:
 
 class CurlImpersonatingClient:
     def __init__(self, impersonate: str | dict = "chrome124"):
-        self._session = Session(impersonate=resolve_impersonate(impersonate))
+        target = resolve_impersonate(impersonate)
+        self.user_agent: str = ""
+
+        def _capture_ua(type_: int, data: bytes) -> None:
+            if self.user_agent or type_ != 2:  # CURLINFO_HEADER_OUT = 2
+                return
+            for line in data.decode("utf-8", errors="replace").splitlines():
+                if line.lower().startswith("user-agent:"):
+                    self.user_agent = line.split(":", 1)[1].strip()
+                    break
+
+        self._session = Session(
+            impersonate=cast(BrowserTypeLiteral, target),
+            curl_options={CurlOpt.VERBOSE: 1, CurlOpt.DEBUGFUNCTION: _capture_ua},
+        )
         self.cookies = httpx.Cookies()
 
     def request(self, method: str, url: str, **kwargs) -> httpx.Response:
@@ -37,11 +55,11 @@ class CurlImpersonatingClient:
 
         for cookie in self.cookies.jar:
             self._session.cookies.set(
-                cookie.name, cookie.value, cookie.domain, cookie.path
+                cookie.name, cookie.value or "", cookie.domain, cookie.path
             )
 
         response = self._session.request(
-            method=method,
+            method=cast(Any, method),
             url=url,
             headers=headers,
             timeout=timeout,
@@ -54,8 +72,15 @@ class CurlImpersonatingClient:
             json=kwargs.pop("json", None),
         )
 
+        # _capture_ua fires during the request above; inject the captured UA
+        # into the httpx.Request headers so callers can read it back.
+        if not any(k.lower() == "user-agent" for k in headers):
+            headers["User-Agent"] = self.user_agent
+
         for cookie in self._session.cookies.jar:
-            self.cookies.set(cookie.name, cookie.value, cookie.domain, cookie.path)
+            self.cookies.set(
+                cookie.name, cookie.value or "", cookie.domain, cookie.path
+            )
 
         response_headers = dict(response.headers)
         for key in list(response_headers):

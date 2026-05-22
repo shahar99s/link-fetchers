@@ -44,6 +44,14 @@ FETCHER_CASES = [
     ("https://1024terabox.com/s/1LJTcFCQ5haHb838XjlghcA", "TeraBoxFetcher", "TeraBox"),
     ("https://limewire.com/d/KJ6Qa#Onk5j8PVz5", "LimewireFetcher", "Limewire"),
     ("https://www.4shared.com/s/fkEvKTDlWge", "FourSharedFetcher", "4shared"),
+    ("https://gofile.io/d/SXwLDt", "GoFileFetcher", "GoFile"),
+    (
+        "https://wormhole.app/W00DZv#gDZGGoKuKsWb4uqdBfgBsA",
+        "WormholeFetcher",
+        "Wormhole",
+    ),
+    ("https://trbt.cc/v8y7cq32fay2.html", "TurbobitFetcher", "Turbobit"),
+    ("https://turbobit.net/v8y7cq32fay2.html", "TurbobitFetcher", "Turbobit"),
 ]
 
 
