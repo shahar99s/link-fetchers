@@ -1,0 +1,39 @@
+[tool.poetry]
+name = "link-fetchers"
+version = "1.0.0"
+description = "File link fetcher library built on httporchestrator."
+license = "Apache-2.0"
+authors = ["Shahar Sivan"]
+
+keywords = ["fetcher", "download", "file-transfer", "link"]
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+packages = [{include = "link_fetchers"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+httporchestrator = {path = "../httporchestrator", develop = true}
+curl-cffi = ">=0.7"
+pycryptodome = ">=3.0"
+cryptography = ">=3.0"
+loguru = ">=0.6"
+httpx = ">=0.27"
+dropbox = ">=12.0.2"
+
+[tool.poetry.dev-dependencies]
+pytest = ">=7.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"
