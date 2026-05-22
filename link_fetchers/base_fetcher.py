@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 from collections.abc import Callable, Sequence
 from functools import wraps
 from typing import Any
@@ -272,13 +273,20 @@ class BaseFetcher:
         self.flow = self.flow.export(list(export))
         return self
 
+    def _log_case_id(self) -> str:
+        ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        name = (self.NAME or "fetcher").lower().replace(" ", "-")
+        mode = self.mode.name.lower() if self.mode else "unknown"
+        return f"{ts}_{name}_{mode}"
+
     def run(self, param: dict | None = None):
         self.flow = self.flow.with_steps(tuple(self.steps))
         client = self.build_http_client()
+        case_id = self._log_case_id()
         if client is None:
-            return self.flow.run(inputs=param)
+            return self.flow.run(inputs=param, case_id=case_id)
         try:
-            return self.flow.run(inputs=param, client=client)
+            return self.flow.run(inputs=param, client=client, case_id=case_id)
         finally:
             client.close()
 
