@@ -6,7 +6,6 @@ import os
 import struct
 from urllib.parse import urlparse
 
-import httpx
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -86,42 +85,38 @@ class WormholeFetcher(BaseFetcher):
             return _is_cloud_uploaded(v) and _has_remaining_downloads(v)
 
         return [
+            RequestStep("get B2 download auth")
+            .post(f"/api/room/{self.room_id}/b2/auth-download")
+            .headers(
+                **self.headers,
+                Authorization=lambda v: self._auth_header(v["salt_b64"]),
+            )
+            .capture(
+                "b2_download_url", lambda r, v: r.json().get("downloadUrl") or ""
+            )
+            .capture(
+                "b2_auth_token",
+                lambda r, v: r.json().get("authorizationToken") or "",
+            )
+            .after(lambda _r, _v: {"chunks": [], "piece_index": 0})
+            .check(status_is(200), "expected 200 from B2 auth-download")
+            .check(
+                lambda r, v: bool(v.get("b2_download_url")),
+                "Error: Wormhole B2 auth did not return a download URL",
+            )
+            .when(lambda v: self.should_fetch(v, downloads_count=1, when=_should_download)),
             ConditionalStep(
-                RequestStep("get B2 download auth")
-                .post(f"/api/room/{self.room_id}/b2/auth-download")
-                .headers(
-                    **self.headers,
-                    Authorization=lambda v: self._auth_header(v["salt_b64"]),
-                )
-                .capture(
-                    "b2_download_url", lambda r, v: r.json().get("downloadUrl") or ""
-                )
-                .capture(
-                    "b2_auth_token",
-                    lambda r, v: r.json().get("authorizationToken") or "",
-                )
-                .check(status_is(200), "expected 200 from B2 auth-download")
-                .check(
-                    lambda r, v: bool(v.get("b2_download_url")),
-                    "Error: Wormhole B2 auth did not return a download URL",
-                ),
-            ).run_when(
-                lambda v: self.should_fetch(v, downloads_count=1, when=_should_download)
-            ),
-            ConditionalStep(
-                RequestStep("download")
+                RequestStep("download piece")
                 .get(
                     lambda v: (
-                        f"{v['b2_download_url']}/file/{self._B2_BUCKET}/{self.room_id}/0"
+                        f"{v['b2_download_url']}/file/{self._B2_BUCKET}"
+                        f"/{self.room_id}/{v['piece_index']}"
                     )
                 )
                 .headers(Authorization=lambda v: v["b2_auth_token"])
-                .after(
-                    lambda r, v: (
-                        self._save_b2_file(r.body, v) if r.status_code == 200 else {}
-                    )
-                )
-                .check(status_is(200), "expected 200 from B2"),
+                .after(lambda r, v: self._after_piece(r, v))
+                .check(status_is(200), "expected 200 from B2")
+                .while_(lambda v: v.get("piece_index", 0) < v.get("piece_count", 1)),
             ).run_when(
                 lambda v: self.should_fetch(
                     v, downloads_count_key="remaining_downloads", when=_should_download
@@ -219,23 +214,19 @@ class WormholeFetcher(BaseFetcher):
 
     # ── B2 download ─────────────────────────────────────────────────────────
 
-    def _save_b2_file(self, piece0_bytes: bytes, variables: dict) -> dict:
-        b2_url = variables["b2_download_url"]
-        b2_token = variables["b2_auth_token"]
-        piece_count = variables.get("piece_count", 1)
-        filename = variables["filename"]
+    def _after_piece(self, response, variables: dict) -> dict:
+        chunks: list[bytes] = list(variables.get("chunks", []))
+        chunks.append(response.body)
+        piece_index: int = variables.get("piece_index", 0)
+        piece_count: int = variables.get("piece_count", 1)
+        updates: dict = {"chunks": chunks, "piece_index": piece_index + 1}
+        if piece_index + 1 >= piece_count:
+            updates.update(self._assemble_and_save(chunks, variables))
+        return updates
 
-        chunks = [piece0_bytes]
-        for i in range(1, piece_count):
-            r = httpx.get(
-                f"{b2_url}/file/{self._B2_BUCKET}/{self.room_id}/{i}",
-                headers={"Authorization": b2_token},
-            )
-            r.raise_for_status()
-            chunks.append(r.content)
-
+    def _assemble_and_save(self, chunks: list[bytes], variables: dict) -> dict:
         decrypted = self._ece_decrypt(b"".join(chunks))
-        path = self.resolve_save_path(filename)
+        path = self.resolve_save_path(variables["filename"])
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as fh:
             fh.write(decrypted)

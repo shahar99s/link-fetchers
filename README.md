@@ -53,6 +53,7 @@ link-fetchers <url> [options]
 | `--log-details` | off | Enable verbose JSON request/response logging |
 | `--retry-times N` | `3` | Number of retry attempts for transient errors |
 | `--retry-interval SECS` | `2.0` | Seconds to wait between retries |
+| `--impersonate TARGET` | | TLS fingerprint to impersonate (e.g. `chrome131`) |
 | `--opt KEY=VALUE` | | Provider-specific option, may be repeated |
 
 **Examples:**

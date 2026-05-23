@@ -209,7 +209,7 @@ class BaseFetcher:
                     self.extract_by_key_or_cb(filename_key, variables),
                 ),
             )
-        return ConditionalStep(request).run_when(
+        return request.when(
             lambda variables: self.should_fetch(
                 variables, downloads_count=downloads_count, when=when
             )
