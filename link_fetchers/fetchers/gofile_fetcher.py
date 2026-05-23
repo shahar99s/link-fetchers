@@ -4,7 +4,7 @@ import hashlib
 import re
 import time
 
-from httporchestrator import RequestStep, Response
+from httporchestrator import ConditionalStep, ForEachStep, RequestStep, Response
 
 from link_fetchers.base_fetcher import BaseFetcher
 from link_fetchers.utils import format_size, format_timestamp, status_is, variable_is
@@ -37,7 +37,6 @@ class GoFileFetcher(BaseFetcher):
         self.link = link
         self.password = password
         self.content_id = self.URL_PATTERN.search(link).group(1)
-        self.user_agent = None
 
         super().__init__()
 
@@ -47,11 +46,8 @@ class GoFileFetcher(BaseFetcher):
             .post("/accounts")
             .headers(**self.headers)
             .json({})
-            # Safe capture: returns None on non-200 so the status check below gives the real error
-            .capture(
-                "guest_token", lambda r, v: (r.json().get("data") or {}).get("token")
-            )
-            .after(lambda r, v: self._capture_user_agent(r))
+            .capture("guest_token", lambda r, v: (r.json().get("data") or {}).get("token"))
+            .capture("user_agent", lambda r, v: r.request.headers.get("user-agent") or "")
             .check(
                 lambda r, v: r.status_code != 429,
                 "Error: GoFile rate-limited account creation; wait a moment and retry",
@@ -68,7 +64,7 @@ class GoFileFetcher(BaseFetcher):
                 Authorization=lambda v: f"Bearer {v['guest_token']}",
                 **{
                     "X-Website-Token": lambda v: self._compute_website_token(
-                        v["guest_token"]
+                        v["guest_token"], v.get("user_agent", "")
                     ),
                     "X-BL": self._XBL,
                 },
@@ -89,31 +85,31 @@ class GoFileFetcher(BaseFetcher):
 
     def build_fetch_steps(self) -> list:
         return [
-            self.download_step(
-                url_key="direct_link",
-                filename_key="filename",
-                downloads_count=1,
-                when=lambda v: v.get("available"),
-                headers={
+            ConditionalStep(
+                RequestStep("download")
+                .get(lambda v: v["file"]["link"])
+                .headers(
                     **self.headers,
-                    "Authorization": lambda v: f"Bearer {v['guest_token']}",
-                    "Cookie": lambda v: f"accountToken={v['guest_token']}",
-                    "X-Website-Token": lambda v: self._compute_website_token(
-                        v["guest_token"]
-                    ),
-                },
+                    Authorization=lambda v: f"Bearer {v['guest_token']}",
+                    Cookie=lambda v: f"accountToken={v['guest_token']}",
+                    **{
+                        "X-Website-Token": lambda v: self._compute_website_token(
+                            v["guest_token"], v.get("user_agent", "")
+                        ),
+                    },
+                )
+                .after(lambda r, v: self.save_file(r, v["file"]["name"]))
+                .check(status_is(200), "expected 200 downloading file")
+                .for_each("files")
+                .bind_as("file")
+            ).run_when(
+                lambda v: self.should_fetch(v, downloads_count=1, when=lambda v: v.get("available"))
             )
         ]
 
-    def _capture_user_agent(self, response) -> dict:
-        self.user_agent = response.request.headers.get("user-agent") or ""
-        return {}
-
-    def _compute_website_token(self, token: str) -> str:
+    def _compute_website_token(self, token: str, user_agent: str = "") -> str:
         time_window = str(int(time.time()) // 14400)
-        seed = (
-            f"{self.user_agent}::{self._XBL}::{token}::{time_window}::{self._XWT_SALT}"
-        )
+        seed = f"{user_agent}::{self._XBL}::{token}::{time_window}::{self._XWT_SALT}"
         return hashlib.sha256(seed.encode()).hexdigest()
 
     def _content_url(self) -> str:
@@ -153,6 +149,7 @@ class GoFileFetcher(BaseFetcher):
             "available": bool(primary),
             "filename": primary.get("name") or f"gofile-{self.content_id}",
             "direct_link": primary.get("link"),
+            "files": [{"name": f.get("name", ""), "link": f.get("link", "")} for f in files],
             "metadata": metadata,
         }
 
