@@ -50,6 +50,12 @@ def _parse_args() -> argparse.Namespace:
         help="Seconds to wait between retries (default: 2.0)",
     )
     parser.add_argument(
+        "--impersonate",
+        metavar="TARGET",
+        default=None,
+        help="TLS fingerprint to impersonate (e.g. chrome131, chrome124)",
+    )
+    parser.add_argument(
         "--opt",
         metavar="KEY=VALUE",
         action="append",
@@ -81,6 +87,7 @@ def main() -> None:
             save_path=args.save_path,
             retry_times=args.retry_times,
             retry_interval=args.retry_interval,
+            impersonate=args.impersonate,
             **extra,
         )
         fetcher.run()
